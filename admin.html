@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Administración · Imprimir aquí</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@500;700;800&family=IBM+Plex+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body class="admin-page">
+<main>
+<header class="top">
+  <div><h1>Administración</h1><p>Gestiona compras y las impresoras disponibles.</p></div>
+  <a href="index.html">Volver a imprimir</a>
+</header>
+
+<section class="card" aria-labelledby="access-title">
+  <h2 id="access-title">Acceso</h2>
+  <div class="auth">
+    <div class="field"><label for="key">Clave de administrador</label><input id="key" type="password" autocomplete="current-password"></div>
+    <button id="load" type="button">Cargar panel</button>
+  </div>
+  <p class="status" id="status" role="status" aria-live="polite"></p>
+</section>
+
+<div id="panel" class="hidden">
+  <nav class="tabs" aria-label="Secciones de administración">
+    <button type="button" id="orders-tab" aria-selected="true">Compras</button>
+    <button type="button" id="printers-tab" aria-selected="false">Impresoras</button>
+  </nav>
+
+  <section class="card" id="orders-section" aria-labelledby="orders-title">
+    <div class="toolbar"><div><h2 id="orders-title">Compras</h2><p>Consulta el estado y vuelve a enviar pedidos a impresión.</p></div><button type="button" class="secondary" id="refresh-orders">Actualizar</button></div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Fecha</th><th>Impresora</th><th>Cliente</th><th>Hojas</th><th>Opciones</th><th>Total</th><th>Estado de impresión</th><th>Acciones</th></tr></thead>
+      <tbody id="orders"></tbody>
+    </table></div>
+    <p class="empty hidden" id="orders-empty">Todavía no hay compras.</p>
+    <p class="empty section-error hidden" id="orders-error"></p>
+  </section>
+
+  <section class="card hidden" id="printers-section" aria-labelledby="printers-title">
+    <div class="toolbar"><div><h2 id="printers-title">Impresoras</h2><p>Hasta 4 impresoras, con un máximo de 350 hojas por pedido en cada una.</p></div><button type="button" class="secondary" id="refresh-printers">Actualizar</button></div>
+    <form class="printer-form" id="printer-form">
+      <div class="field"><label for="printer-id">Identificador</label><input id="printer-id" required maxlength="60" pattern="[A-Za-z0-9_-]+" placeholder="ej. 1"></div>
+      <div class="field"><label for="printer-name">Nombre visible</label><input id="printer-name" required maxlength="100" placeholder="Impresora salón"></div>
+      <button type="submit" id="save-printer">Agregar impresora</button>
+      <button type="button" class="secondary hidden" id="cancel-edit">Cancelar</button>
+    </form>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Identificador</th><th>Nombre visible</th><th>Estado</th><th>Capacidad por pedido</th><th>Acciones</th></tr></thead>
+      <tbody id="printers"></tbody>
+    </table></div>
+    <p class="empty hidden" id="printers-empty">No hay impresoras configuradas.</p>
+    <p class="empty section-error hidden" id="printers-error"></p>
+  </section>
+</div>
+
+<script>
+var $=function(id){return document.getElementById(id)};
+var printerList=[];
+var editingId=null;
+var maxPrinters=4;
+var printerSavePending=false;
+function headers(json){var h={"x-clave":$("key").value};if(json)h["Content-Type"]="application/json";return h}
+function request(url,options){
+  return fetch(url,options).then(function(response){
+    return response.text().then(function(text){
+      var data={};
+      if(text){try{data=JSON.parse(text)}catch(_){throw new Error("El servidor devolvió una respuesta inválida.")}}
+      if(!response.ok)throw new Error(data.error||"No se pudo completar la solicitud ("+response.status+").");
+      return data;
+    });
+  });
+}
+function setStatus(text,type){
+  var status=$("status");status.textContent=text;status.className="status"+(type?" "+type:"");
+}
+function loadPanel(){
+  setStatus("Cargando información…");
+  Promise.all([
+    request("/api/admin/pedidos",{headers:headers(false)}).then(function(data){return{data:data}},function(error){return{error:error}}),
+    request("/api/admin/impresoras",{headers:headers(false)}).then(function(data){return{data:data}},function(error){return{error:error}})
+  ]).then(function(results){
+    $("panel").classList.remove("hidden");
+    var messages=[];
+    if(results[0].error){
+      $("orders-empty").classList.add("hidden");$("orders-error").textContent=results[0].error.message;$("orders-error").classList.remove("hidden");
+      messages.push("Compras: "+results[0].error.message);
+    }else{
+      $("orders-error").classList.add("hidden");renderOrders(results[0].data);messages.push("Compras actualizadas.");
+    }
+    if(results[1].error){
+      $("printers-empty").classList.add("hidden");$("printers-error").textContent=results[1].error.message;$("printers-error").classList.remove("hidden");
+      messages.push("Impresoras: "+results[1].error.message);
+    }else{
+      $("printers-error").classList.add("hidden");renderPrinters(results[1].data);messages.push("Impresoras actualizadas.");
+    }
+    setStatus(messages.join(" "),results[0].error||results[1].error?"error":"success");
+  }).catch(function(error){setStatus(error.message,"error")});
+}
+function renderOrders(lista){
+  if(!Array.isArray(lista))throw new Error("La respuesta de compras no tiene el formato esperado.");
+  var body=$("orders");body.textContent="";
+  $("orders-empty").classList.toggle("hidden",lista.length!==0);
+  lista.forEach(function(order){
+    var row=body.insertRow();
+    var date=new Date(order.creado);
+    [isNaN(date.getTime())?"—":date.toLocaleString("es-CO"),"Imp. "+(order.impresora||"—"),order.nombre||"—",
+      (Number(order.paginas||0)*Number(order.copias||0))+" hojas",
+      (order.color?"Color":"B/N")+" · "+(order.papel==="fotografico"?"Fotográfico":"Común")+" "+(order.tamano||"A4"),
+      formatMoney(order.total)].forEach(function(value){
+      row.insertCell().textContent=value;
+    });
+    var statusNames={pagado:"Pagado",imprimiendo:"Imprimiendo",listo:"Listo",error:"Error",cancelado:"Cancelado"};
+    row.insertCell().textContent=statusNames[order.estado]||"—";
+    var action=row.insertCell();action.className="actions";
+    var button=document.createElement("button");button.type="button";button.textContent="Reimprimir";
+    button.className="secondary";button.disabled=order.estado==="imprimiendo";
+    button.addEventListener("click",function(){reprint(order.id,button)});
+    var remove=document.createElement("button");remove.type="button";remove.className="danger";remove.textContent="Eliminar";
+    remove.addEventListener("click",function(){deleteOrder(order)});
+    action.appendChild(button);
+    action.appendChild(remove);
+  });
+}
+function deleteOrder(order){
+  if(!window.confirm('¿Eliminar la compra "'+(order.nombre||order.id)+'"? Esta acción no se puede deshacer.'))return;
+  request("/api/admin/pedidos/"+encodeURIComponent(order.id),{method:"DELETE",headers:headers(false)})
+    .then(function(){setStatus("Compra eliminada.","success");return request("/api/admin/pedidos",{headers:headers(false)})})
+    .then(renderOrders)
+    .catch(function(error){setStatus(error.message,"error")});
+}
+function formatMoney(value){
+  var amount=Number(value);
+  return Number.isFinite(amount)?"$"+Math.round(amount).toLocaleString("es-CO"):"—";
+}
+function reprint(id,button){
+  if(!id){setStatus("El pedido no tiene un identificador válido.","error");return}
+  button.disabled=true;
+  request("/api/admin/pedidos/"+encodeURIComponent(id)+"/reimprimir",{method:"POST",headers:headers(false)})
+    .then(function(){setStatus("Pedido enviado a impresión.","success");return request("/api/admin/pedidos",{headers:headers(false)})})
+    .then(renderOrders)
+    .catch(function(error){setStatus(error.message,"error")})
+    .then(function(){button.disabled=false});
+}
+function renderPrinters(result){
+  var printers=result.impresoras||result;
+  var statuses=result.estadosImpresoras||{};
+  if(result&&Number.isInteger(result.maxImpresoras))maxPrinters=result.maxImpresoras;
+  if(Array.isArray(printers)){
+    printerList=printers.map(function(item){return{id:String(item.id),nombre:String(item.nombre)}});
+  }else if(printers&&typeof printers==="object"){
+    printerList=Object.keys(printers).map(function(id){return{id:id,nombre:String(printers[id])}});
+  }else throw new Error("La respuesta de impresoras no tiene el formato esperado.");
+  var body=$("printers");body.textContent="";
+  $("printers-empty").classList.toggle("hidden",printerList.length!==0);
+  printerList.forEach(function(printer){
+    var row=body.insertRow();row.insertCell().textContent=printer.id;row.insertCell().textContent=printer.nombre;
+    row.insertCell().textContent=statuses[printer.id]==="imprimiendo"?"Imprimiendo · no disponible":"Disponible";
+    row.insertCell().textContent="350 hojas";
+    var actions=row.insertCell();actions.className="actions";
+    var edit=document.createElement("button");edit.type="button";edit.className="secondary";edit.textContent="Editar";
+    edit.addEventListener("click",function(){beginEdit(printer)});
+    var remove=document.createElement("button");remove.type="button";remove.className="danger";remove.textContent="Eliminar";
+    remove.addEventListener("click",function(){deletePrinter(printer)});
+    actions.appendChild(edit);actions.appendChild(remove);
+  });
+  updatePrinterForm();
+}
+function updatePrinterForm(){
+  $("save-printer").disabled=printerSavePending||(editingId===null&&printerList.length>=maxPrinters);
+}
+function beginEdit(printer){
+  editingId=printer.id;$("printer-id").value=printer.id;$("printer-id").readOnly=true;
+  $("printer-name").value=printer.nombre;$("save-printer").textContent="Guardar cambios";
+  $("cancel-edit").classList.remove("hidden");updatePrinterForm();$("printer-name").focus();
+}
+function resetForm(){
+  editingId=null;$("printer-form").reset();$("printer-id").readOnly=false;
+  $("save-printer").textContent="Agregar impresora";$("cancel-edit").classList.add("hidden");updatePrinterForm();
+}
+function savePrinter(event){
+  event.preventDefault();
+  var id=$("printer-id").value.trim(),name=$("printer-name").value.trim();
+  if(!id||!name){setStatus("Completa el identificador y el nombre de la impresora.","error");return}
+  var editing=editingId!==null;
+  if(!editing&&printerList.length>=maxPrinters){setStatus("No se pueden agregar más de "+maxPrinters+" impresoras.","error");return}
+  var url=editing?"/api/admin/impresoras/"+encodeURIComponent(editingId):"/api/admin/impresoras";
+  var method=editing?"PUT":"POST";
+  printerSavePending=true;updatePrinterForm();
+  request(url,{method:method,headers:headers(true),body:JSON.stringify({id:id,nombre:name})})
+    .then(function(){resetForm();setStatus(editing?"Impresora actualizada.":"Impresora agregada.","success");return refreshPrinters()})
+    .catch(function(error){setStatus(error.message,"error")})
+    .then(function(){printerSavePending=false;updatePrinterForm()});
+}
+function refreshPrinters(){
+  return request("/api/admin/impresoras",{headers:headers(false)}).then(function(result){
+    renderPrinters(result);$("printers-error").classList.add("hidden");
+  });
+}
+function refreshPrinterStatus(){
+  if($("panel").classList.contains("hidden"))return;
+  refreshPrinters().catch(function(error){
+    $("printers-error").textContent=error.message;
+    $("printers-error").classList.remove("hidden");
+  });
+}
+function deletePrinter(printer){
+  if(!window.confirm('¿Eliminar la impresora "'+printer.nombre+'" ('+printer.id+')?'))return;
+  request("/api/admin/impresoras/"+encodeURIComponent(printer.id),{method:"DELETE",headers:headers(false)})
+    .then(function(){setStatus("Impresora eliminada.","success");return refreshPrinters()})
+    .catch(function(error){setStatus(error.message,"error")});
+}
+function refreshOrders(){
+  request("/api/admin/pedidos",{headers:headers(false)}).then(function(result){
+    renderOrders(result);$("orders-error").classList.add("hidden");
+  })
+    .then(function(){setStatus("Compras actualizadas.","success")})
+    .catch(function(error){setStatus(error.message,"error")});
+}
+function selectTab(tab){
+  var orders=tab==="orders";
+  $("orders-tab").setAttribute("aria-selected",orders);
+  $("printers-tab").setAttribute("aria-selected",!orders);
+  $("orders-section").classList.toggle("hidden",!orders);
+  $("printers-section").classList.toggle("hidden",orders);
+}
+$("load").addEventListener("click",loadPanel);
+setInterval(refreshPrinterStatus,2000);
+$("key").addEventListener("keydown",function(event){if(event.key==="Enter")loadPanel()});
+$("orders-tab").addEventListener("click",function(){selectTab("orders")});
+$("printers-tab").addEventListener("click",function(){selectTab("printers")});
+$("refresh-orders").addEventListener("click",refreshOrders);
+$("refresh-printers").addEventListener("click",function(){refreshPrinters().then(function(){setStatus("Impresoras actualizadas.","success")}).catch(function(error){setStatus(error.message,"error")})});
+$("printer-form").addEventListener("submit",savePrinter);
+$("cancel-edit").addEventListener("click",resetForm);
+</script>
+</main>
+</body>
+</html>

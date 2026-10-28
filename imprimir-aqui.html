@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Imprimir aquí</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@500;700;800&family=IBM+Plex+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body class="print-page">
+<p>La página de impresión se ha unificado. <a id="continue" href="index.html">Continuar</a></p>
+<script>
+var destination="index.html"+location.search+location.hash;
+document.getElementById("continue").href=destination;
+location.replace(destination);
+</script>
+</body>
+</html>

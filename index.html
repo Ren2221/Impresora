@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Imprimir aquí</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@500;700;800&family=IBM+Plex+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body class="print-page">
+<main>
+<div class="dots" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+<a class="admin-link" href="admin.html">Administración</a>
+<section id="printer-picker" class="card printer-picker hide">
+<h1>Elegí dónde imprimir</h1>
+<p class="sub">Selecciona una impresora para comenzar tu pedido.</p>
+<div class="printer-grid" id="printer-list"></div>
+<p class="picker-status" id="picker-status" role="status" aria-live="polite"></p>
+<button class="link" id="retry-printers" type="button">Actualizar impresoras</button>
+</section>
+<div id="workflow" class="hide">
+<a class="printer-back" href="index.html">Elegir otra impresora</a>
+<h1 id="ptitle">Impresora 1</h1>
+<p class="sub">Sube tu archivo, paga y se imprime sola. Sin filas.</p>
+<p class="printer-status" id="printer-status" role="status" aria-live="polite"></p>
+
+<div class="card"><div class="prices">
+<div class="price"><span>Blanco y negro</span><b id="pbn"></b><span>por hoja · común A4</span></div>
+<div class="price"><span>Color</span><b id="pco"></b><span>por hoja · común A4</span></div>
+</div></div>
+
+<!-- Paso 1: archivo -->
+<section id="s1">
+<label class="drop"><strong>Elegir archivo</strong><small>PDF, imagen, Word, Excel, PowerPoint o texto</small>
+<input id="file" type="file"></label>
+<p class="err" id="e1" role="alert"></p>
+</section>
+
+<!-- Paso 2: opciones y total -->
+<section id="s2" class="hide">
+<div class="card">
+<div class="file"><span id="fname"></span><span class="tag" id="fpages"></span></div>
+<p class="note" id="fnote"></p>
+<label class="f">Tipo de impresión</label>
+<div class="seg"><button type="button" id="bn" aria-pressed="true">Blanco y negro</button><button type="button" id="co" aria-pressed="false">Color</button></div>
+<div class="options-row">
+  <div><label class="f">Tipo de papel</label><div class="seg" role="group" aria-label="Tipo de papel"><button type="button" id="paper-comun" aria-pressed="true">Común</button><button type="button" id="paper-fotografico" aria-pressed="false">Fotográfico (x2)</button></div></div>
+  <div><label class="f" for="paper-size">Tamaño</label><select class="t" id="paper-size"><option value="A4">A4</option><option value="A3">A3 (x2)</option></select></div>
+</div>
+<p class="note">El precio base corresponde a papel común A4. El papel fotográfico y el tamaño A3 duplican el precio cada uno.</p>
+<label class="f">Copias</label>
+<div class="cnt"><button type="button" id="mi" aria-label="Menos copias">−</button><output id="cp">1</output><button type="button" id="ma" aria-label="Más copias">+</button></div>
+<p class="note" id="capacity-note"></p>
+</div>
+<div class="card">
+<div class="sum"><span id="l1"></span><span id="v1"></span></div>
+<div class="sum tot"><span>Total</span><span id="vt"></span></div>
+</div>
+<p class="err" id="e2" role="alert"></p>
+<button class="cta" id="go">Pagar y continuar</button>
+<div class="centered"><button class="link" id="chg">Cambiar archivo</button></div>
+</section>
+
+<!-- Paso 3: pago -->
+<section id="s3" class="hide">
+<div class="card">
+<div class="sum tot payment-total"><span>A pagar</span><span id="pay"></span></div>
+<p class="err" id="e3" role="alert"></p>
+<p class="note" id="nota3">Pago de demostración: no se cobra dinero. Usa datos ficticios; no ingreses datos de una tarjeta real. Los datos se usan solo en este intento y no se guardan.</p>
+<label class="f" for="cardholder">Titular de la tarjeta</label>
+<input class="t" id="cardholder" type="text" autocomplete="off" maxlength="100" placeholder="Nombre ficticio">
+<label class="f" for="card-number">Número de tarjeta ficticia</label>
+<input class="t" id="card-number" type="text" inputmode="numeric" autocomplete="off" maxlength="19" pattern="[0-9]{12,19}" placeholder="1234567812345678">
+<div class="options-row">
+  <div><label class="f" for="card-expiration">Vencimiento</label><input class="t" id="card-expiration" type="month" autocomplete="off"></div>
+  <div><label class="f" for="card-code">Código de seguridad</label><input class="t" id="card-code" type="password" inputmode="numeric" autocomplete="off" maxlength="4" placeholder="123"></div>
+</div>
+<label class="payment-confirm"><input id="confirm-payment" type="checkbox"><span>Confirmo que son datos ficticios y pagar este pedido de demostración.</span></label>
+</div>
+<button class="cta" id="pb" disabled>Pagar</button>
+<div class="centered"><button class="link" id="back">Volver</button></div>
+</section>
+
+<!-- Paso 4: imprimiendo -->
+<section id="s4" class="hide">
+<div class="card">
+<div class="ok" id="st">Procesando pago…</div>
+<div class="bar"><div id="pg"></div></div>
+<div class="tag" id="stx">Conectando con el banco</div>
+<div class="ticket hide" id="tk"></div>
+<button class="cta hide" id="nw">Imprimir otro archivo</button>
+</div>
+</section>
+</div>
+</main>
+
+<script>
+var $=function(i){return document.getElementById(i)};
+var cfg={precios:{bn:500,color:600},modo:"demo",moneda:"$",maxImpresoras:4,capacidadMaximaHojas:350,impresoras:{}};
+var money=function(n){return cfg.moneda+Math.round(n).toLocaleString("es-CO")};
+var q=new URLSearchParams(location.search);
+var hasSelectedPrinter=Boolean(q.get("impresora")||q.get("p")||q.get("pedido"));
+var imp=q.get("impresora")||q.get("p")||(q.get("pedido")?"1":"");
+var st={id:null,pages:0,color:false,copies:1,paper:"comun",paperSize:"A4",total:0,name:""};
+var timer=null;
+
+function show(n){["s1","s2","s3","s4"].forEach(function(s,i){$(s).classList.toggle("hide",i!==n-1)});window.scrollTo(0,0)}
+function setBar(p,t){$("pg").style.setProperty("--progress",p+"%");$("stx").textContent=t}
+function msg(t,error){var e=$("e1");e.textContent=t;e.classList.toggle("error",Boolean(error))}
+function api(m,u,b){return fetch(u,{method:m,headers:{"Content-Type":"application/json"},body:b?JSON.stringify(b):undefined}).then(function(r){return r.json().then(function(j){return{ok:r.ok,status:r.status,j:j}})})}
+
+function init(){
+  if(!imp){
+    $("workflow").classList.add("hide");
+    $("printer-picker").classList.remove("hide");
+    renderPrinterPicker();
+    return;
+  }
+  $("printer-picker").classList.add("hide");
+  $("workflow").classList.remove("hide");
+  $("ptitle").textContent=(cfg.impresoras&&cfg.impresoras[imp])||("Impresora "+imp);
+  $("pbn").textContent=money(cfg.precios.bn);$("pco").textContent=money(cfg.precios.color);
+  if(cfg.modo==="real"){
+    document.body.classList.add("real-mode");
+    $("nota3").textContent="Te llevaremos a la página segura de pagos. Cada compra requiere un pago nuevo; al terminar, vuelves aquí y tu archivo se imprime.";
+    $("pb").textContent="Ir a pagar";
+  }
+  if(q.get("pedido")){st.id=q.get("pedido");seguir()}
+}
+function renderPrinterPicker(){
+  var list=$("printer-list");list.textContent="";
+  var printers=cfg.impresoras;
+  if(!printers||typeof printers!=="object"||Array.isArray(printers)){
+    $("picker-status").textContent="La lista de impresoras recibida no es válida.";
+    $("picker-status").classList.add("error");
+    return;
+  }
+  var ids=Object.keys(printers).sort(function(a,b){return a.localeCompare(b,"es",{numeric:true})});
+  $("picker-status").classList.remove("error");
+  var available=ids.filter(function(id){return !cfg.estadosImpresoras||cfg.estadosImpresoras[id]!=="imprimiendo"}).length;
+  $("picker-status").textContent=ids.length?(available?"":"Todas las impresoras están en uso; actualiza la página cuando termine una impresión."):"Todavía no hay impresoras disponibles. Contacta al encargado.";
+  ids.forEach(function(id){
+    var busy=cfg.estadosImpresoras&&cfg.estadosImpresoras[id]==="imprimiendo";
+    var link=document.createElement(busy?"div":"a");
+    link.className="printer-choice"+(busy?" busy":"");
+    if(!busy)link.href=location.pathname+"?impresora="+encodeURIComponent(id);
+    var name=document.createElement("strong");
+    name.textContent=printers[id]||("Impresora "+id);
+    var detail=document.createElement("small");
+    detail.textContent="Impresora "+id+" · "+(busy?"En uso, imprimiendo":"Disponible");
+    link.appendChild(name);link.appendChild(detail);list.appendChild(link);
+  });
+}
+function updatePrinterStatus(){
+  if(!imp)return;
+  var busy=cfg.estadosImpresoras&&cfg.estadosImpresoras[imp]==="imprimiendo";
+  var status=$("printer-status");
+  status.className="printer-status"+(busy?" busy":"");
+  status.textContent=busy?"En uso · esta impresora no está disponible hasta que termine de imprimir.":"Disponible";
+  $("file").disabled=Boolean(busy);
+  $("go").disabled=Boolean(busy);
+  $("pb").disabled=Boolean(busy)||!$("confirm-payment").checked||!paymentDetailsValid();
+}
+function loadConfig(){
+  $("picker-status").textContent="Cargando impresoras…";
+  fetch("/api/config").then(function(r){
+    if(!r.ok)throw new Error("No se pudieron cargar las impresoras ("+r.status+").");
+    return r.json();
+  }).then(function(c){
+    cfg=Object.assign(cfg,c);
+    init();
+    updatePrinterStatus();
+  }).catch(function(error){
+    if(!hasSelectedPrinter){
+      $("printer-picker").classList.remove("hide");
+      $("workflow").classList.add("hide");
+      $("picker-status").textContent=error.message+" Comprueba que el servidor esté funcionando e intenta actualizar.";
+      $("picker-status").classList.add("error");
+    }else{
+      init();
+      msg(error.message,true);
+    }
+  });
+}
+function refreshAvailability(){
+  fetch("/api/config").then(function(r){
+    if(!r.ok)throw new Error("No se pudo actualizar el estado de las impresoras ("+r.status+").");
+    return r.json();
+  }).then(function(c){
+    cfg=Object.assign(cfg,c);
+    if(!imp)renderPrinterPicker();
+    updatePrinterStatus();
+  }).catch(function(error){
+    if(!imp){
+      $("picker-status").textContent=error.message;
+      $("picker-status").classList.add("error");
+    }else{
+      $("printer-status").textContent=error.message+" El estado podría estar desactualizado.";
+      $("printer-status").className="printer-status error";
+    }
+  });
+}
+$("retry-printers").onclick=loadConfig;
+loadConfig();
+setInterval(refreshAvailability,2000);
+
+// ---- Paso 1: subir el archivo ----
+function fail(t){msg(t,true);$("file").value=""}
+function subir(f){
+  if(cfg.estadosImpresoras&&cfg.estadosImpresoras[imp]==="imprimiendo"){
+    updatePrinterStatus();msg("La impresora está ocupada. Espera a que termine antes de subir el archivo.",true);return;
+  }
+  msg("");
+  if(f.size>50*1024*1024){fail("El archivo pesa más de 50 MB. Sube uno más liviano.");return}
+  var fd=new FormData();fd.append("impresora",imp);fd.append("archivo",f);
+  var x=new XMLHttpRequest();x.open("POST","/api/pedidos");
+  msg("Subiendo "+f.name+" · 0%");
+  x.upload.onprogress=function(e){if(e.lengthComputable){var p=Math.round(e.loaded/e.total*100);msg(p<100?"Subiendo "+f.name+" · "+p+"%":"Contando las hojas…")}};
+  x.onload=function(){var r={};try{r=JSON.parse(x.responseText)}catch(_){}
+    if(x.status===200){msg("");st={id:r.id,pages:r.paginas,color:false,copies:1,paper:"comun",paperSize:"A4",total:0,name:r.nombre};render();show(2)}
+    else fail(r.error||"No se pudo subir el archivo. Intenta de nuevo.")};
+  x.onerror=function(){fail("Sin conexión. Revisa tu internet e intenta de nuevo.")};
+  x.send(fd);
+}
+$("file").addEventListener("change",function(e){if(e.target.files[0])subir(e.target.files[0])});
+var dz=document.querySelector(".drop");
+["dragenter","dragover"].forEach(function(ev){dz.addEventListener(ev,function(e){e.preventDefault();dz.classList.add("over")})});
+["dragleave","drop"].forEach(function(ev){dz.addEventListener(ev,function(e){e.preventDefault();dz.classList.remove("over")})});
+dz.addEventListener("drop",function(e){if(e.dataTransfer.files[0])subir(e.dataTransfer.files[0])});
+
+// ---- Paso 2: opciones ----
+function render(){
+  var baseUnit=st.color?cfg.precios.color:cfg.precios.bn;
+  var multiplier=(st.paper==="fotografico"?2:1)*(st.paperSize==="A3"?2:1);
+  var unit=baseUnit*multiplier,sheets=st.pages*st.copies;
+  st.total=sheets*unit;
+  $("fname").textContent=st.name;
+  $("fpages").textContent=st.pages+(st.pages===1?" hoja":" hojas");
+  $("bn").setAttribute("aria-pressed",!st.color);$("co").setAttribute("aria-pressed",st.color);
+  $("paper-comun").setAttribute("aria-pressed",st.paper==="comun");$("paper-fotografico").setAttribute("aria-pressed",st.paper==="fotografico");
+  $("paper-size").value=st.paperSize;
+  $("cp").textContent=st.copies;
+  var maxCopies=Math.min(99,Math.floor(cfg.capacidadMaximaHojas/st.pages));
+  $("mi").disabled=st.copies<=1;$("ma").disabled=st.copies>=maxCopies;
+  $("capacity-note").textContent="Hojas: "+sheets+" de "+cfg.capacidadMaximaHojas+" por impresora.";
+  $("l1").textContent=sheets+" × "+money(unit);
+  $("v1").textContent=money(st.total);$("vt").textContent=money(st.total);$("pay").textContent=money(st.total);
+}
+$("bn").onclick=function(){st.color=false;render()};
+$("co").onclick=function(){st.color=true;render()};
+$("paper-comun").onclick=function(){st.paper="comun";render()};
+$("paper-fotografico").onclick=function(){st.paper="fotografico";render()};
+$("paper-size").onchange=function(){st.paperSize=$("paper-size").value;render()};
+$("mi").onclick=function(){st.copies=Math.max(1,st.copies-1);render()};
+$("ma").onclick=function(){st.copies=Math.min(99,Math.floor(cfg.capacidadMaximaHojas/st.pages),st.copies+1);render()};
+$("chg").onclick=function(){$("file").value="";show(1)};
+$("go").onclick=function(){
+  $("e2").textContent="";$("go").disabled=true;
+  api("POST","/api/pedidos/"+st.id+"/confirmar",{color:st.color,copias:st.copies,papel:st.paper,tamano:st.paperSize}).then(function(r){
+    $("go").disabled=false;
+    if(!r.ok){$("e2").textContent=r.j.error||"No se pudo continuar.";return}
+    st.total=r.j.total;render();resetPaymentConfirmation();show(3);
+  }).catch(function(){$("go").disabled=false;$("e2").textContent="Sin conexión. Intenta de nuevo."});
+};
+
+// ---- Paso 3: pago ----
+function resetPaymentConfirmation(){
+  $("confirm-payment").checked=false;
+  $("cardholder").value="";
+  $("card-number").value="";
+  $("card-expiration").value="";
+  $("card-code").value="";
+  $("pb").disabled=true;
+}
+function paymentDetails(){
+  return {
+    titular:$("cardholder").value.trim(),
+    numero:$("card-number").value,
+    vencimiento:$("card-expiration").value,
+    codigo:$("card-code").value
+  };
+}
+function paymentDetailsValid(){
+  var details=paymentDetails();
+  var expiration=details.vencimiento.match(/^(\d{4})-(0[1-9]|1[0-2])$/);
+  var expirationDate=expiration?new Date(Number(expiration[1]),Number(expiration[2]),0):null;
+  return /^[\p{L}\p{M} ]{1,100}$/u.test(details.titular)&&/^\d{12,19}$/.test(details.numero)&&
+    expirationDate&&expirationDate>=new Date(new Date().getFullYear(),new Date().getMonth(),1)&&
+    /^\d{3,4}$/.test(details.codigo);
+}
+["cardholder","card-number","card-expiration","card-code"].forEach(function(id){
+  $(id).addEventListener("input",function(){
+    if(id==="cardholder")$("cardholder").value=$("cardholder").value.replace(/[^\p{L}\p{M} ]/gu,"");
+    if(id==="card-number")$("card-number").value=$("card-number").value.replace(/\D/g,"").slice(0,19);
+    $("pb").disabled=Boolean(cfg.estadosImpresoras&&cfg.estadosImpresoras[imp]==="imprimiendo")||!$("confirm-payment").checked||!paymentDetailsValid();
+  });
+  $(id).addEventListener("change",function(){
+    $("pb").disabled=Boolean(cfg.estadosImpresoras&&cfg.estadosImpresoras[imp]==="imprimiendo")||!$("confirm-payment").checked||!paymentDetailsValid();
+  });
+});
+$("confirm-payment").onchange=function(){$("pb").disabled=Boolean(cfg.estadosImpresoras&&cfg.estadosImpresoras[imp]==="imprimiendo")||!$("confirm-payment").checked||!paymentDetailsValid()};
+$("back").onclick=function(){resetPaymentConfirmation();show(2)};
+$("pb").onclick=function(){
+  if((cfg.estadosImpresoras&&cfg.estadosImpresoras[imp]==="imprimiendo")||!$("confirm-payment").checked||!paymentDetailsValid())return;
+  var details=paymentDetails();
+  $("e3").textContent="";
+  $("pb").disabled=true;
+  if(cfg.modo==="real"){
+    api("POST","/api/pedidos/"+st.id+"/pagar",details).then(function(r){
+      if(r.ok&&r.j.url)location.href=r.j.url;
+      else{$("e3").textContent=r.j.error||"No se pudo iniciar el pago."}
+    }).catch(function(){$("e3").textContent="Sin conexión. Intenta de nuevo."})
+      .then(resetPaymentConfirmation);
+    return;
+  }
+  api("POST","/api/pedidos/"+st.id+"/pagar",details).then(function(r){
+    if(r.ok||r.status===402)seguir();else $("e3").textContent=r.j.error||"No se pudo procesar el pago.";
+  }).catch(function(){$("e3").textContent="Sin conexión. Intenta de nuevo."})
+    .then(resetPaymentConfirmation);
+};
+
+// ---- Paso 4: seguimiento del pedido ----
+function terminar(titulo,detalle){clearInterval(timer);$("st").textContent=titulo;setBar(0,detalle);$("nw").textContent="Volver a empezar";$("nw").classList.remove("hide")}
+function seguir(){
+  show(4);$("tk").classList.add("hide");$("nw").classList.add("hide");clearInterval(timer);
+  var tick=function(){
+    fetch("/api/pedidos/"+st.id).then(function(r){
+      if(r.status===404){terminar("No encontramos el pedido","Vuelve a empezar.");return null}
+      return r.json();
+    }).then(function(p){
+      if(!p)return;
+      if(p.estado==="cancelado"){terminar("Pedido cancelado",p.error||"El pedido fue cancelado. No se imprimió ninguna hoja.");return}
+      var m={esperando_pago:[15,"Esperando confirmación del pago","Procesando pago…"],pagado:[40,"Pago aprobado","Pago aprobado"],imprimiendo:[75,"Enviando a la impresora","Imprimiendo"]}[p.estado];
+      if(p.estado==="imprimiendo"){
+        var totalSheets=Number(p.paginas||0)*Number(p.copias||0);
+        var printedSheets=Math.min(Number(p.hojasImpresas||0),totalSheets);
+        $("st").textContent="Imprimiendo hoja "+printedSheets+" de "+totalSheets;
+        setBar(40+Math.floor(printedSheets/totalSheets*60),"Imprimiendo hoja "+printedSheets+" de "+totalSheets);
+        return;
+      }
+      if(m){$("st").textContent=m[2];setBar(m[0],m[1]);return}
+      if(p.estado==="listo"){
+        clearInterval(timer);$("st").textContent="Listo, retira tus hojas";setBar(100,"Listo");
+        $("tk").classList.add("multiline");
+        $("tk").textContent=["Recibo "+p.id.toUpperCase(),"Impresora "+p.impresora,p.nombre,(p.paginas*p.copias)+" hojas · "+(p.color?"color":"B/N"),"Papel "+(p.papel==="fotografico"?"fotográfico":"común")+" · "+(p.tamano||"A4"),"Total "+money(p.total)].join("\n");
+        $("tk").classList.remove("hide");$("nw").textContent="Imprimir otro archivo";$("nw").classList.remove("hide");
+      } else terminar("Algo salió mal",p.error||"No se pudo completar el pedido. Avisa al encargado.");
+    }).catch(function(){setBar(0,"Sin conexión, reintentando…")});
+  };
+  tick();timer=setInterval(tick,1500);
+}
+$("nw").onclick=function(){
+  clearInterval(timer);$("file").value="";$("paper-size").value="A4";resetPaymentConfirmation();
+  st={id:null,pages:0,color:false,copies:1,paper:"comun",paperSize:"A4",total:0,name:""};
+  history.replaceState(null,"",location.pathname+"?impresora="+encodeURIComponent(imp));
+  msg("");show(1);
+};
+</script>
+</body>
+</html>

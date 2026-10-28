@@ -1,0 +1,13 @@
+{
+  "name": "impresora-local",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Servidor local para pedidos y administración de impresoras",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
