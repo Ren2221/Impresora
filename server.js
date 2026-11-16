@@ -7,8 +7,13 @@ const path = require("node:path");
 
 const ROOT = __dirname;
 const DEFAULT_PRINTERS = { "1": "Impresora 1" };
+const DEFAULT_PRICES = { bn: 500, color: 600 };
 const MAX_PRINTERS = 4;
 const MAX_SHEETS_PER_ORDER = 350;
+const ADMIN_PASSWORD_MIN_LENGTH = 16;
+const ADMIN_AUTH_FAILURE_LIMIT = 10;
+const ADMIN_AUTH_WINDOW_MS = 15 * 60 * 1000;
+const SCRYPT_OPTIONS = { N: 16384, r: 8, p: 1, maxmem: 32 * 1024 * 1024 };
 const ALLOWED_EXTENSIONS = new Set([
   ".pdf", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".txt",
   ".doc", ".docx", ".odt", ".rtf", ".xls", ".xlsx", ".ppt", ".pptx"
@@ -32,7 +37,7 @@ class HttpError extends Error {
 }
 
 function defaultState() {
-  return { printers: DEFAULT_PRINTERS, orders: [] };
+  return { printers: DEFAULT_PRINTERS, precios: DEFAULT_PRICES, orders: [] };
 }
 
 function readState(file) {
@@ -42,8 +47,19 @@ function readState(file) {
       typeof state.printers !== "object" || Array.isArray(state.printers) || !Array.isArray(state.orders)) {
     throw new Error("El archivo de datos no tiene un formato válido.");
   }
+  const hasPrices = Object.hasOwn(state, "precios");
+  if (!hasPrices) state.precios = { ...DEFAULT_PRICES };
+  if (!state.precios || typeof state.precios !== "object" || Array.isArray(state.precios) ||
+      !Number.isSafeInteger(state.precios.bn) || state.precios.bn < 1 || state.precios.bn > 1_000_000_000 ||
+      !Number.isSafeInteger(state.precios.color) || state.precios.color < 1 || state.precios.color > 1_000_000_000) {
+    throw new Error("Los precios guardados no tienen un formato válido.");
+  }
+  let stateChanged = !hasPrices;
   if (Object.hasOwn(state, "tarjetasDemo")) {
     delete state.tarjetasDemo;
+    stateChanged = true;
+  }
+  if (stateChanged) {
     saveState(file, state);
   }
   return state;
@@ -51,7 +67,7 @@ function readState(file) {
 
 function saveState(file, state) {
   const temporary = file + "." + crypto.randomUUID() + ".tmp";
-  fs.writeFileSync(temporary, JSON.stringify(state, null, 2), { flag: "wx" });
+  fs.writeFileSync(temporary, JSON.stringify(state, null, 2), { flag: "wx", mode: 0o600 });
   try {
     fs.renameSync(temporary, file);
   } catch (error) {
@@ -68,12 +84,6 @@ function sendJson(response, status, data) {
     "Cache-Control": "no-store"
   });
   response.end(body);
-}
-
-function safeEqual(left, right) {
-  const a = Buffer.from(left);
-  const b = Buffer.from(right);
-  return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
 async function readBody(request, limit) {
@@ -115,6 +125,8 @@ function orderResponse(order) {
     impresora: order.impresora,
     nombre: order.nombre,
     paginas: order.paginas,
+    paginasDocumento: order.paginasDocumento || order.paginas,
+    paginasSeleccionadas: order.paginasSeleccionadas || [],
     copias: order.copias,
     color: order.color,
     papel: order.papel || "comun",
@@ -152,6 +164,35 @@ function countPages(extension, buffer) {
   return Math.max(1, Math.ceil(buffer.length / bytesPerPage));
 }
 
+function parsePageSelection(value, documentPages) {
+  if (value !== undefined && typeof value !== "string") {
+    throw new HttpError(400, "La selección de páginas debe ser texto.");
+  }
+  const selection = typeof value === "string" ? value.trim() : "";
+  if (!selection || /^todas$/i.test(selection)) {
+    return Array.from({ length: documentPages }, function(_, index) { return index + 1; });
+  }
+  const selectedPages = [];
+  const seen = new Set();
+  for (const part of selection.split(",")) {
+    const match = part.trim().match(/^(\d+)(?:-(\d+))?$/);
+    if (!match) throw new HttpError(400, "Indica las páginas como números o rangos, por ejemplo 1,3-5.");
+    const start = Number(match[1]);
+    const end = match[2] ? Number(match[2]) : start;
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 1 ||
+        end < start || end > documentPages) {
+      throw new HttpError(400, "Las páginas deben estar entre 1 y " + documentPages + ".");
+    }
+    for (let page = start; page <= end; page += 1) {
+      if (seen.has(page)) throw new HttpError(400, "No repitas páginas en la selección.");
+      seen.add(page);
+      selectedPages.push(page);
+    }
+  }
+  if (!selectedPages.length) throw new HttpError(400, "Selecciona al menos una página.");
+  return selectedPages;
+}
+
 function cleanFilename(filename) {
   const basename = path.basename(filename.replace(/\\/g, "/"));
   const cleaned = basename.replace(/[\u0000-\u001f\u007f]/g, "").slice(0, 180);
@@ -163,12 +204,27 @@ function createApplicationServer(options) {
   const dataDir = path.resolve(settings.dataDir || path.join(ROOT, "data"));
   const uploadDir = path.join(dataDir, "uploads");
   const stateFile = path.join(dataDir, "database.json");
-  const adminPassword = settings.adminPassword || process.env.ADMIN_PASSWORD || crypto.randomBytes(24).toString("base64url");
+  const generatedAdminPassword = !settings.adminPassword && !process.env.ADMIN_PASSWORD;
+  const adminPassword = settings.adminPassword || process.env.ADMIN_PASSWORD ||
+    crypto.randomBytes(24).toString("base64url");
+  if (Buffer.byteLength(adminPassword, "utf8") < ADMIN_PASSWORD_MIN_LENGTH) {
+    throw new Error("ADMIN_PASSWORD debe tener al menos " + ADMIN_PASSWORD_MIN_LENGTH + " caracteres.");
+  }
+  if (Buffer.byteLength(adminPassword, "utf8") > 1024) {
+    throw new Error("ADMIN_PASSWORD no puede superar los 1024 bytes.");
+  }
+  const adminPasswordSalt = crypto.randomBytes(16);
+  const adminPasswordHash = crypto.scryptSync(adminPassword, adminPasswordSalt, 32, SCRYPT_OPTIONS);
+  if (generatedAdminPassword && require.main === module) {
+    console.log("Clave de administrador generada para esta ejecución: " + adminPassword);
+    console.log("Configura ADMIN_PASSWORD en el entorno para usar una clave persistente.");
+  }
   const maxUploadBytes = settings.maxUploadBytes || 50 * 1024 * 1024;
   const printDurationMs = Math.max(1, Math.min(settings.printDurationMs ?? 5000, 5000));
-  fs.mkdirSync(uploadDir, { recursive: true });
+  fs.mkdirSync(uploadDir, { recursive: true, mode: 0o700 });
   const state = readState(stateFile);
   const printTimers = new Map();
+  const adminAuthFailures = new Map();
 
   function persist() {
     saveState(stateFile, state);
@@ -183,10 +239,39 @@ function createApplicationServer(options) {
   });
   if (interruptedOrders.length) persist();
 
-  function requireAdmin(request) {
-    if (!safeEqual(request.headers["x-clave"] || "", adminPassword)) {
+  async function requireAdmin(request) {
+    const now = Date.now();
+    const remoteAddress = request.socket.remoteAddress || "unknown";
+    for (const [address, failure] of adminAuthFailures) {
+      if (now - failure.startedAt >= ADMIN_AUTH_WINDOW_MS) adminAuthFailures.delete(address);
+    }
+    const previousFailure = adminAuthFailures.get(remoteAddress);
+    if (previousFailure && previousFailure.count >= ADMIN_AUTH_FAILURE_LIMIT) {
+      throw new HttpError(429, "Demasiados intentos. Espera 15 minutos antes de volver a intentar.");
+    }
+    const failure = previousFailure || { count: 0, startedAt: now };
+    failure.count += 1;
+    const attemptNumber = failure.count;
+    adminAuthFailures.set(remoteAddress, failure);
+
+    const candidate = request.headers["x-clave"];
+    let matches = false;
+    if (typeof candidate === "string" && Buffer.byteLength(candidate, "utf8") <= 1024) {
+      const candidateHash = await new Promise(function(resolve, reject) {
+        crypto.scrypt(candidate, adminPasswordSalt, adminPasswordHash.length, SCRYPT_OPTIONS, function(error, key) {
+          if (error) reject(error);
+          else resolve(key);
+        });
+      });
+      matches = crypto.timingSafeEqual(candidateHash, adminPasswordHash);
+    }
+    if (!matches) {
+      if (attemptNumber >= ADMIN_AUTH_FAILURE_LIMIT) {
+        throw new HttpError(429, "Demasiados intentos. Espera 15 minutos antes de volver a intentar.");
+      }
       throw new HttpError(401, "Clave de administrador incorrecta.");
     }
+    adminAuthFailures.delete(remoteAddress);
   }
 
   function findOrder(id) {
@@ -262,7 +347,7 @@ function createApplicationServer(options) {
 
     if (method === "GET" && pathname === "/api/config") {
       sendJson(response, 200, {
-        precios: { bn: 500, color: 600 },
+        precios: state.precios,
         modo: "demo",
         moneda: "$",
         maxImpresoras: MAX_PRINTERS,
@@ -311,7 +396,7 @@ function createApplicationServer(options) {
       const id = crypto.randomUUID();
       const storedName = id + extension;
       const filePath = path.join(uploadDir, storedName);
-      fs.writeFileSync(filePath, fileBuffer, { flag: "wx" });
+      fs.writeFileSync(filePath, fileBuffer, { flag: "wx", mode: 0o600 });
       const order = {
         id,
         creado: new Date().toISOString(),
@@ -319,6 +404,8 @@ function createApplicationServer(options) {
         nombre: filename,
         archivo: storedName,
         paginas: pages,
+        paginasDocumento: pages,
+        paginasSeleccionadas: [],
         copias: 1,
         color: false,
         papel: "comun",
@@ -354,9 +441,11 @@ function createApplicationServer(options) {
         if (order.estado !== "esperando_pago") throw new HttpError(409, "El pedido ya no se puede modificar.");
         const payload = parseJson(await readBody(request, 16 * 1024));
         if (typeof payload.color !== "boolean") throw new HttpError(400, "Indica si la impresión es a color.");
+        const documentPages = order.paginasDocumento || order.paginas;
+        const selectedPages = parsePageSelection(payload.paginas, documentPages);
         const copies = Number(payload.copias);
         if (!Number.isInteger(copies) || copies < 1 || copies > 99) throw new HttpError(400, "La cantidad de copias debe estar entre 1 y 99.");
-        if (order.paginas * copies > MAX_SHEETS_PER_ORDER) {
+        if (selectedPages.length * copies > MAX_SHEETS_PER_ORDER) {
           throw new HttpError(400, "El pedido supera el máximo de " + MAX_SHEETS_PER_ORDER + " hojas por impresora.");
         }
         const paper = payload.papel === undefined ? "comun" : payload.papel;
@@ -364,13 +453,15 @@ function createApplicationServer(options) {
         if (!["comun", "fotografico"].includes(paper)) throw new HttpError(400, "El tipo de papel seleccionado no es válido.");
         if (!["A4", "A3"].includes(paperSize)) throw new HttpError(400, "El tamaño de papel seleccionado no es válido.");
         const paperMultiplier = (paper === "fotografico" ? 2 : 1) * (paperSize === "A3" ? 2 : 1);
+        order.paginas = selectedPages.length;
+        order.paginasSeleccionadas = selectedPages;
         order.color = payload.color;
         order.copias = copies;
         order.papel = paper;
         order.tamano = paperSize;
-        order.total = order.paginas * copies * (payload.color ? 600 : 500) * paperMultiplier;
+        order.total = order.paginas * copies * (payload.color ? state.precios.color : state.precios.bn) * paperMultiplier;
         persist();
-        sendJson(response, 200, { total: order.total });
+        sendJson(response, 200, { total: order.total, paginas: order.paginas });
         return;
       }
       if (method === "POST" && action === "pagar") {
@@ -412,7 +503,7 @@ function createApplicationServer(options) {
       }
     }
 
-    if (pathname.startsWith("/api/admin/")) requireAdmin(request);
+    if (pathname.startsWith("/api/admin/")) await requireAdmin(request);
 
     if (method === "GET" && pathname === "/api/admin/pedidos") {
       sendJson(response, 200, state.orders.filter(function(order) {
@@ -469,6 +560,25 @@ function createApplicationServer(options) {
       return;
     }
 
+    if (pathname === "/api/admin/precios" && method === "GET") {
+      sendJson(response, 200, { precios: state.precios });
+      return;
+    }
+
+    if (pathname === "/api/admin/precios" && method === "PUT") {
+      const payload = parseJson(await readBody(request, 16 * 1024));
+      const prices = payload && typeof payload === "object" && !Array.isArray(payload) ? payload.precios : null;
+      if (!prices || typeof prices !== "object" || Array.isArray(prices) ||
+          !Number.isSafeInteger(prices.bn) || prices.bn < 1 || prices.bn > 1_000_000_000 ||
+          !Number.isSafeInteger(prices.color) || prices.color < 1 || prices.color > 1_000_000_000) {
+        throw new HttpError(400, "Los precios deben ser números enteros entre 1 y 1.000.000.000.");
+      }
+      state.precios = { bn: prices.bn, color: prices.color };
+      persist();
+      sendJson(response, 200, { precios: state.precios });
+      return;
+    }
+
     if (pathname === "/api/admin/impresoras" && (method === "POST" || method === "PUT")) {
       const payload = parseJson(await readBody(request, 16 * 1024));
       const id = String(payload.id || "").trim();
@@ -522,6 +632,8 @@ function createApplicationServer(options) {
     response.setHeader("X-Content-Type-Options", "nosniff");
     response.setHeader("Referrer-Policy", "same-origin");
     response.setHeader("X-Frame-Options", "DENY");
+    response.setHeader("Cross-Origin-Resource-Policy", "same-origin");
+    response.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
     response.setHeader("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'");
     let url;
     try {
@@ -562,11 +674,13 @@ function createApplicationServer(options) {
   const server = http.createServer(function(request, response) {
     void handleRequest(request, response);
   });
+  server.headersTimeout = 10_000;
+  server.requestTimeout = 120_000;
+  server.keepAliveTimeout = 5_000;
   server.on("close", function() {
     for (const timer of printTimers.values()) clearTimeout(timer);
     printTimers.clear();
   });
-  server.adminPassword = adminPassword;
   return server;
 }
 
@@ -574,9 +688,8 @@ if (require.main === module) {
   const server = createApplicationServer();
   const host = process.env.HOST || "127.0.0.1";
   const port = Number(process.env.PORT || 3000);
-  if (!process.env.ADMIN_PASSWORD) {
-    console.log("Clave de administrador generada para esta ejecución: " + server.adminPassword);
-    console.log("Configura ADMIN_PASSWORD en el entorno para usar una clave persistente.");
+  if (!["127.0.0.1", "::1", "localhost"].includes(host.toLowerCase())) {
+    console.warn("Advertencia: el servidor usa HTTP sin cifrar en una interfaz de red. Usa un proxy HTTPS antes de exponerlo.");
   }
   server.listen(port, host, function() {
     console.log("Servidor listo en http://" + host + ":" + port);

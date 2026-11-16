@@ -27,6 +27,7 @@
   <nav class="tabs" aria-label="Secciones de administración">
     <button type="button" id="orders-tab" aria-selected="true">Compras</button>
     <button type="button" id="printers-tab" aria-selected="false">Impresoras</button>
+    <button type="button" id="prices-tab" aria-selected="false">Precios</button>
   </nav>
 
   <section class="card" id="orders-section" aria-labelledby="orders-title">
@@ -37,6 +38,15 @@
     </table></div>
     <p class="empty hidden" id="orders-empty">Todavía no hay compras.</p>
     <p class="empty section-error hidden" id="orders-error"></p>
+  </section>
+
+  <section class="card hidden" id="prices-section" aria-labelledby="prices-title">
+    <div class="toolbar"><div><h2 id="prices-title">Precios por hoja</h2><p>Configura el precio base para papel común A4; las opciones de papel y tamaño mantienen sus multiplicadores.</p></div></div>
+    <form class="printer-form" id="price-form">
+      <div class="field"><label for="price-bn">Blanco y negro</label><input id="price-bn" type="number" min="1" max="1000000000" step="1" required></div>
+      <div class="field"><label for="price-color">Color</label><input id="price-color" type="number" min="1" max="1000000000" step="1" required></div>
+      <button type="submit" id="save-prices">Guardar precios</button>
+    </form>
   </section>
 
   <section class="card hidden" id="printers-section" aria-labelledby="printers-title">
@@ -80,7 +90,8 @@ function loadPanel(){
   setStatus("Cargando información…");
   Promise.all([
     request("/api/admin/pedidos",{headers:headers(false)}).then(function(data){return{data:data}},function(error){return{error:error}}),
-    request("/api/admin/impresoras",{headers:headers(false)}).then(function(data){return{data:data}},function(error){return{error:error}})
+    request("/api/admin/impresoras",{headers:headers(false)}).then(function(data){return{data:data}},function(error){return{error:error}}),
+    request("/api/admin/precios",{headers:headers(false)}).then(function(data){return{data:data}},function(error){return{error:error}})
   ]).then(function(results){
     $("panel").classList.remove("hidden");
     var messages=[];
@@ -96,7 +107,12 @@ function loadPanel(){
     }else{
       $("printers-error").classList.add("hidden");renderPrinters(results[1].data);messages.push("Impresoras actualizadas.");
     }
-    setStatus(messages.join(" "),results[0].error||results[1].error?"error":"success");
+    if(results[2].error){
+      messages.push("Precios: "+results[2].error.message);
+    }else{
+      renderPrices(results[2].data);messages.push("Precios actualizados.");
+    }
+    setStatus(messages.join(" "),results[0].error||results[1].error||results[2].error?"error":"success");
   }).catch(function(error){setStatus(error.message,"error")});
 }
 function renderOrders(lista){
@@ -168,6 +184,26 @@ function renderPrinters(result){
   });
   updatePrinterForm();
 }
+function renderPrices(result){
+  var prices=result&&result.precios;
+  if(!prices||!Number.isSafeInteger(prices.bn)||!Number.isSafeInteger(prices.color)){
+    throw new Error("La respuesta de precios no tiene el formato esperado.");
+  }
+  $("price-bn").value=prices.bn;
+  $("price-color").value=prices.color;
+}
+function savePrices(event){
+  event.preventDefault();
+  var bn=Number($("price-bn").value),color=Number($("price-color").value);
+  if(!Number.isSafeInteger(bn)||bn<1||bn>1000000000||!Number.isSafeInteger(color)||color<1||color>1000000000){
+    setStatus("Ingresa precios enteros entre 1 y 1.000.000.000.","error");return;
+  }
+  $("save-prices").disabled=true;
+  request("/api/admin/precios",{method:"PUT",headers:headers(true),body:JSON.stringify({precios:{bn:bn,color:color}})})
+    .then(function(result){renderPrices(result);setStatus("Precios guardados.","success")})
+    .catch(function(error){setStatus(error.message,"error")})
+    .then(function(){$("save-prices").disabled=false});
+}
 function updatePrinterForm(){
   $("save-printer").disabled=printerSavePending||(editingId===null&&printerList.length>=maxPrinters);
 }
@@ -221,19 +257,24 @@ function refreshOrders(){
 }
 function selectTab(tab){
   var orders=tab==="orders";
+  var printers=tab==="printers";
   $("orders-tab").setAttribute("aria-selected",orders);
-  $("printers-tab").setAttribute("aria-selected",!orders);
+  $("printers-tab").setAttribute("aria-selected",printers);
+  $("prices-tab").setAttribute("aria-selected",!orders&&!printers);
   $("orders-section").classList.toggle("hidden",!orders);
-  $("printers-section").classList.toggle("hidden",orders);
+  $("printers-section").classList.toggle("hidden",!printers);
+  $("prices-section").classList.toggle("hidden",orders||printers);
 }
 $("load").addEventListener("click",loadPanel);
 setInterval(refreshPrinterStatus,2000);
 $("key").addEventListener("keydown",function(event){if(event.key==="Enter")loadPanel()});
 $("orders-tab").addEventListener("click",function(){selectTab("orders")});
 $("printers-tab").addEventListener("click",function(){selectTab("printers")});
+$("prices-tab").addEventListener("click",function(){selectTab("prices")});
 $("refresh-orders").addEventListener("click",refreshOrders);
 $("refresh-printers").addEventListener("click",function(){refreshPrinters().then(function(){setStatus("Impresoras actualizadas.","success")}).catch(function(error){setStatus(error.message,"error")})});
 $("printer-form").addEventListener("submit",savePrinter);
+$("price-form").addEventListener("submit",savePrices);
 $("cancel-edit").addEventListener("click",resetForm);
 </script>
 </main>

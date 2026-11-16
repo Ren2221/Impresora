@@ -1,7 +1,8 @@
 {
   "printers": {
     "1": "Impresora 1",
-    "2": "Impresora 2"
+    "2": "Impresora 2",
+    "67": "Six Sevensora"
   },
   "orders": [
     {
@@ -293,6 +294,61 @@
       "hojasImpresas": 9,
       "estado": "listo",
       "error": ""
+    },
+    {
+      "id": "f3bbf57a-7877-4849-bf64-e8e9b445159e",
+      "creado": "2026-10-28T12:10:06.661Z",
+      "impresora": "1",
+      "nombre": "images (2).jpg",
+      "archivo": "f3bbf57a-7877-4849-bf64-e8e9b445159e.jpg",
+      "paginas": 1,
+      "copias": 1,
+      "color": false,
+      "papel": "comun",
+      "tamano": "A4",
+      "total": 0,
+      "pagoConfirmado": false,
+      "hojasImpresas": 0,
+      "estado": "esperando_pago",
+      "error": ""
+    },
+    {
+      "id": "a14d4202-7ee3-4428-8931-83e676758495",
+      "creado": "2026-11-13T12:45:32.355Z",
+      "impresora": "1",
+      "nombre": "UP3ro_T.P. Nº 2_ Estructuras de Control en Phyton.pdf",
+      "archivo": "a14d4202-7ee3-4428-8931-83e676758495.pdf",
+      "paginas": 4,
+      "copias": 1,
+      "color": false,
+      "papel": "comun",
+      "tamano": "A4",
+      "total": 0,
+      "pagoConfirmado": false,
+      "hojasImpresas": 0,
+      "estado": "esperando_pago",
+      "error": ""
+    },
+    {
+      "id": "3d4f185e-ba76-444d-8a60-c044ea31ccc5",
+      "creado": "2026-11-13T12:47:47.185Z",
+      "impresora": "1",
+      "nombre": "costume7 (convert.io).png",
+      "archivo": "3d4f185e-ba76-444d-8a60-c044ea31ccc5.png",
+      "paginas": 1,
+      "copias": 70,
+      "color": false,
+      "papel": "comun",
+      "tamano": "A4",
+      "total": 35000,
+      "pagoConfirmado": true,
+      "hojasImpresas": 70,
+      "estado": "listo",
+      "error": ""
     }
-  ]
+  ],
+  "precios": {
+    "bn": 500,
+    "color": 600
+  }
 }

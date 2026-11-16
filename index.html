@@ -18,6 +18,11 @@
 <p class="picker-status" id="picker-status" role="status" aria-live="polite"></p>
 <button class="link" id="retry-printers" type="button">Actualizar impresoras</button>
 </section>
+<section id="printer-unavailable" class="card hide" aria-live="polite">
+<h1>Impresora no disponible</h1>
+<p class="sub">Esta impresora está fuera de servicio o no existe.</p>
+<a href="index.html">Elegir otra impresora</a>
+</section>
 <div id="workflow" class="hide">
 <a class="printer-back" href="index.html">Elegir otra impresora</a>
 <h1 id="ptitle">Impresora 1</h1>
@@ -41,6 +46,9 @@
 <div class="card">
 <div class="file"><span id="fname"></span><span class="tag" id="fpages"></span></div>
 <p class="note" id="fnote"></p>
+<label class="f" for="page-selection">Páginas que quieres imprimir</label>
+<input class="t" id="page-selection" type="text" inputmode="text" placeholder="Todas" aria-describedby="page-selection-summary">
+<p class="note" id="page-selection-summary">Deja vacío para imprimir todas las páginas. También puedes indicar, por ejemplo, 1,3-5.</p>
 <label class="f">Tipo de impresión</label>
 <div class="seg"><button type="button" id="bn" aria-pressed="true">Blanco y negro</button><button type="button" id="co" aria-pressed="false">Color</button></div>
 <div class="options-row">
@@ -49,7 +57,7 @@
 </div>
 <p class="note">El precio base corresponde a papel común A4. El papel fotográfico y el tamaño A3 duplican el precio cada uno.</p>
 <label class="f">Copias</label>
-<div class="cnt"><button type="button" id="mi" aria-label="Menos copias">−</button><output id="cp">1</output><button type="button" id="ma" aria-label="Más copias">+</button></div>
+<div class="cnt"><button type="button" id="mi" aria-label="Menos copias">−</button><input id="cp" type="number" inputmode="numeric" min="1" max="99" step="1" value="1" aria-label="Número de copias"><button type="button" id="ma" aria-label="Más copias">+</button></div>
 <p class="note" id="capacity-note"></p>
 </div>
 <div class="card">
@@ -101,7 +109,7 @@ var money=function(n){return cfg.moneda+Math.round(n).toLocaleString("es-CO")};
 var q=new URLSearchParams(location.search);
 var hasSelectedPrinter=Boolean(q.get("impresora")||q.get("p")||q.get("pedido"));
 var imp=q.get("impresora")||q.get("p")||(q.get("pedido")?"1":"");
-var st={id:null,pages:0,color:false,copies:1,paper:"comun",paperSize:"A4",total:0,name:""};
+var st={id:null,pages:0,pagesDocumento:0,color:false,copies:1,paper:"comun",paperSize:"A4",total:0,name:""};
 var timer=null;
 
 function show(n){["s1","s2","s3","s4"].forEach(function(s,i){$(s).classList.toggle("hide",i!==n-1)});window.scrollTo(0,0)}
@@ -116,6 +124,13 @@ function init(){
     renderPrinterPicker();
     return;
   }
+  if(!cfg.impresoras||!Object.hasOwn(cfg.impresoras,imp)){
+    $("printer-picker").classList.add("hide");
+    $("workflow").classList.add("hide");
+    $("printer-unavailable").classList.remove("hide");
+    return;
+  }
+  $("printer-unavailable").classList.add("hide");
   $("printer-picker").classList.add("hide");
   $("workflow").classList.remove("hide");
   $("ptitle").textContent=(cfg.impresoras&&cfg.impresoras[imp])||("Impresora "+imp);
@@ -153,12 +168,17 @@ function renderPrinterPicker(){
 }
 function updatePrinterStatus(){
   if(!imp)return;
+  if(!cfg.impresoras||!Object.hasOwn(cfg.impresoras,imp)){
+    init();
+    return;
+  }
   var busy=cfg.estadosImpresoras&&cfg.estadosImpresoras[imp]==="imprimiendo";
   var status=$("printer-status");
   status.className="printer-status"+(busy?" busy":"");
   status.textContent=busy?"En uso · esta impresora no está disponible hasta que termine de imprimir.":"Disponible";
   $("file").disabled=Boolean(busy);
-  $("go").disabled=Boolean(busy);
+  if(!$("s2").classList.contains("hide"))render();
+  else $("go").disabled=Boolean(busy);
   $("pb").disabled=Boolean(busy)||!$("confirm-payment").checked||!paymentDetailsValid();
 }
 function loadConfig(){
@@ -177,7 +197,12 @@ function loadConfig(){
       $("picker-status").textContent=error.message+" Comprueba que el servidor esté funcionando e intenta actualizar.";
       $("picker-status").classList.add("error");
     }else{
-      init();
+      $("printer-picker").classList.add("hide");
+      $("printer-unavailable").classList.add("hide");
+      $("workflow").classList.remove("hide");
+      $("ptitle").textContent="Impresora "+imp;
+      $("printer-status").textContent=error.message+" No se pudo verificar la impresora.";
+      $("printer-status").className="printer-status error";
       msg(error.message,true);
     }
   });
@@ -188,8 +213,14 @@ function refreshAvailability(){
     return r.json();
   }).then(function(c){
     cfg=Object.assign(cfg,c);
+    if(imp){
+      $("pbn").textContent=money(cfg.precios.bn);$("pco").textContent=money(cfg.precios.color);
+      if(!$("s2").classList.contains("hide"))render();
+    }
     if(!imp)renderPrinterPicker();
-    updatePrinterStatus();
+    else if(!cfg.impresoras||!Object.hasOwn(cfg.impresoras,imp)||
+      !$("printer-unavailable").classList.contains("hide"))init();
+    else updatePrinterStatus();
   }).catch(function(error){
     if(!imp){
       $("picker-status").textContent=error.message;
@@ -217,7 +248,7 @@ function subir(f){
   msg("Subiendo "+f.name+" · 0%");
   x.upload.onprogress=function(e){if(e.lengthComputable){var p=Math.round(e.loaded/e.total*100);msg(p<100?"Subiendo "+f.name+" · "+p+"%":"Contando las hojas…")}};
   x.onload=function(){var r={};try{r=JSON.parse(x.responseText)}catch(_){}
-    if(x.status===200){msg("");st={id:r.id,pages:r.paginas,color:false,copies:1,paper:"comun",paperSize:"A4",total:0,name:r.nombre};render();show(2)}
+    if(x.status===200){msg("");$("page-selection").value="";st={id:r.id,pages:r.paginas,pagesDocumento:r.paginas,color:false,copies:1,paper:"comun",paperSize:"A4",total:0,name:r.nombre};render();show(2)}
     else fail(r.error||"No se pudo subir el archivo. Intenta de nuevo.")};
   x.onerror=function(){fail("Sin conexión. Revisa tu internet e intenta de nuevo.")};
   x.send(fd);
@@ -229,7 +260,36 @@ var dz=document.querySelector(".drop");
 dz.addEventListener("drop",function(e){if(e.dataTransfer.files[0])subir(e.dataTransfer.files[0])});
 
 // ---- Paso 2: opciones ----
+function parsePageSelectionInput(){
+  var selection=$("page-selection").value.trim();
+  if(!selection||/^todas$/i.test(selection)){
+    return{pages:Array.from({length:st.pagesDocumento},function(_,index){return index+1})};
+  }
+  var pages=[],seen={};
+  var parts=selection.split(",");
+  for(var i=0;i<parts.length;i++){
+    var match=parts[i].trim().match(/^(\d+)(?:-(\d+))?$/);
+    if(!match)return{error:"Usa números separados por comas o rangos, por ejemplo 1,3-5."};
+    var start=Number(match[1]),end=match[2]?Number(match[2]):start;
+    if(!Number.isSafeInteger(start)||!Number.isSafeInteger(end)||start<1||end<start||end>st.pagesDocumento){
+      return{error:"Las páginas deben estar entre 1 y "+st.pagesDocumento+"."};
+    }
+    for(var page=start;page<=end;page++){
+      if(seen[page])return{error:"No repitas páginas en la selección."};
+      seen[page]=true;pages.push(page);
+    }
+  }
+  return pages.length?{pages:pages}:{error:"Selecciona al menos una página."};
+}
 function render(){
+  var selection=parsePageSelectionInput();
+  var selectionValid=!selection.error;
+  if(selectionValid)st.pages=selection.pages.length;
+  var maxCopies=Math.min(99,Math.floor(cfg.capacidadMaximaHojas/st.pages));
+  st.copies=Math.min(st.copies,maxCopies);
+  var enteredCopies=Number($("cp").value);
+  var copiesValid=document.activeElement!==$("cp")||
+    ($("cp").value!==""&&Number.isInteger(enteredCopies)&&enteredCopies>=1&&enteredCopies<=maxCopies);
   var baseUnit=st.color?cfg.precios.color:cfg.precios.bn;
   var multiplier=(st.paper==="fotografico"?2:1)*(st.paperSize==="A3"?2:1);
   var unit=baseUnit*multiplier,sheets=st.pages*st.copies;
@@ -239,13 +299,18 @@ function render(){
   $("bn").setAttribute("aria-pressed",!st.color);$("co").setAttribute("aria-pressed",st.color);
   $("paper-comun").setAttribute("aria-pressed",st.paper==="comun");$("paper-fotografico").setAttribute("aria-pressed",st.paper==="fotografico");
   $("paper-size").value=st.paperSize;
-  $("cp").textContent=st.copies;
-  var maxCopies=Math.min(99,Math.floor(cfg.capacidadMaximaHojas/st.pages));
+  $("cp").max=maxCopies;
+  if(document.activeElement!==$("cp"))$("cp").value=st.copies;
   $("mi").disabled=st.copies<=1;$("ma").disabled=st.copies>=maxCopies;
+  $("page-selection-summary").textContent=selection.error||("Se imprimirán "+st.pages+" de "+st.pagesDocumento+" páginas. Deja vacío para imprimirlas todas.");
+  $("page-selection-summary").classList.toggle("error",Boolean(selection.error));
   $("capacity-note").textContent="Hojas: "+sheets+" de "+cfg.capacidadMaximaHojas+" por impresora.";
   $("l1").textContent=sheets+" × "+money(unit);
   $("v1").textContent=money(st.total);$("vt").textContent=money(st.total);$("pay").textContent=money(st.total);
+  $("go").disabled=!selectionValid||!copiesValid||sheets>cfg.capacidadMaximaHojas||
+    Boolean(cfg.estadosImpresoras&&cfg.estadosImpresoras[imp]==="imprimiendo");
 }
+$("page-selection").addEventListener("input",render);
 $("bn").onclick=function(){st.color=false;render()};
 $("co").onclick=function(){st.color=true;render()};
 $("paper-comun").onclick=function(){st.paper="comun";render()};
@@ -253,13 +318,24 @@ $("paper-fotografico").onclick=function(){st.paper="fotografico";render()};
 $("paper-size").onchange=function(){st.paperSize=$("paper-size").value;render()};
 $("mi").onclick=function(){st.copies=Math.max(1,st.copies-1);render()};
 $("ma").onclick=function(){st.copies=Math.min(99,Math.floor(cfg.capacidadMaximaHojas/st.pages),st.copies+1);render()};
+$("cp").addEventListener("input",function(){
+  if($("cp").value===""){render();return}
+  var copies=Number($("cp").value),maxCopies=Math.min(99,Math.floor(cfg.capacidadMaximaHojas/st.pages));
+  if(Number.isInteger(copies)&&copies>=1)st.copies=Math.min(copies,maxCopies);
+  render();
+});
+$("cp").addEventListener("change",function(){
+  var copies=Number($("cp").value),maxCopies=Math.min(99,Math.floor(cfg.capacidadMaximaHojas/st.pages));
+  if(!Number.isInteger(copies)||copies<1)copies=st.copies;
+  st.copies=Math.min(copies,maxCopies);$("cp").value=st.copies;render();
+});
 $("chg").onclick=function(){$("file").value="";show(1)};
 $("go").onclick=function(){
   $("e2").textContent="";$("go").disabled=true;
-  api("POST","/api/pedidos/"+st.id+"/confirmar",{color:st.color,copias:st.copies,papel:st.paper,tamano:st.paperSize}).then(function(r){
+  api("POST","/api/pedidos/"+st.id+"/confirmar",{color:st.color,copias:st.copies,paginas:$("page-selection").value,papel:st.paper,tamano:st.paperSize}).then(function(r){
     $("go").disabled=false;
     if(!r.ok){$("e2").textContent=r.j.error||"No se pudo continuar.";return}
-    st.total=r.j.total;render();resetPaymentConfirmation();show(3);
+    st.total=r.j.total;if(Number.isInteger(r.j.paginas))st.pages=r.j.paginas;render();resetPaymentConfirmation();show(3);
   }).catch(function(){$("go").disabled=false;$("e2").textContent="Sin conexión. Intenta de nuevo."});
 };
 

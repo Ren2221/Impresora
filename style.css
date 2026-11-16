@@ -279,6 +279,23 @@ body.print-page .cnt output {
   text-align: center;
 }
 
+body.print-page .cnt input {
+  width: 76px;
+  height: 44px;
+  padding: 4px;
+  border: 2px solid var(--line);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--ink);
+  font: 600 18px "IBM Plex Mono", monospace;
+  text-align: center;
+}
+
+body.print-page .cnt input:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
 body.print-page .sum {
   display: flex;
   justify-content: space-between;
@@ -351,6 +368,8 @@ body.print-page .note {
   color: var(--mut);
   font-size: 13px;
 }
+
+body.print-page .note.error { color: var(--err); }
 
 body.print-page .payment-confirm {
   display: flex;

@@ -7,6 +7,7 @@ const path = require("node:path");
 const { afterEach, test } = require("node:test");
 const { createApplicationServer } = require("./server");
 
+const TEST_ADMIN_PASSWORD = "test-admin-key-long-123";
 const servers = [];
 const directories = [];
 
@@ -27,7 +28,7 @@ async function startServer(options) {
   directories.push(dataDir);
   const server = createApplicationServer({
     dataDir,
-    adminPassword: "test-admin-key",
+    adminPassword: TEST_ADMIN_PASSWORD,
     printDurationMs: options && options.printDurationMs || 20
   });
   servers.push(server);
@@ -36,7 +37,7 @@ async function startServer(options) {
 }
 
 function adminHeaders(extra) {
-  return Object.assign({ "x-clave": "test-admin-key" }, extra || {});
+  return Object.assign({ "x-clave": TEST_ADMIN_PASSWORD }, extra || {});
 }
 
 async function json(response) {
@@ -54,16 +55,104 @@ async function waitUntilReady(baseUrl, id) {
 }
 
 test("sirve configuración y protege la administración", async function() {
-  const { baseUrl } = await startServer();
+  const { server, baseUrl } = await startServer();
   const config = await json(await fetch(baseUrl + "/api/config"));
   assert.equal(config.modo, "demo");
   assert.equal(config.impresoras["1"], "Impresora 1");
+  assert.deepEqual(config.precios, { bn: 500, color: 600 });
   assert.equal(Object.hasOwn(config, "tarjetasDemo"), false);
   assert.equal((await fetch(baseUrl + "/api/admin/pedidos")).status, 401);
   assert.equal((await fetch(baseUrl + "/")).status, 200);
   const stylesheet = await fetch(baseUrl + "/style.css");
   assert.equal(stylesheet.status, 200);
   assert.match(stylesheet.headers.get("content-type"), /^text\/css/);
+  assert.equal(stylesheet.headers.get("x-content-type-options"), "nosniff");
+  assert.equal(stylesheet.headers.get("x-frame-options"), "DENY");
+  assert.equal(server.adminPassword, undefined);
+});
+
+test("guarda los precios configurables y cobra solo las páginas seleccionadas", async function() {
+  const { baseUrl, dataDir } = await startServer();
+  assert.equal((await fetch(baseUrl + "/api/admin/precios")).status, 401);
+
+  let response = await fetch(baseUrl + "/api/admin/precios", {
+    method: "PUT",
+    headers: adminHeaders({ "content-type": "application/json" }),
+    body: JSON.stringify({ precios: { bn: 700, color: 900 } })
+  });
+  assert.equal(response.status, 200);
+  assert.deepEqual((await json(response)).precios, { bn: 700, color: 900 });
+  assert.deepEqual((await json(await fetch(baseUrl + "/api/config"))).precios, { bn: 700, color: 900 });
+
+  response = await fetch(baseUrl + "/api/admin/precios", {
+    method: "PUT",
+    headers: adminHeaders({ "content-type": "application/json" }),
+    body: JSON.stringify({ precios: { bn: 700.5, color: 900 } })
+  });
+  assert.equal(response.status, 400);
+
+  const invalidPrinter = new FormData();
+  invalidPrinter.append("impresora", "999");
+  invalidPrinter.append("archivo", new Blob(["archivo"], { type: "text/plain" }), "inexistente.txt");
+  response = await fetch(baseUrl + "/api/pedidos", { method: "POST", body: invalidPrinter });
+  assert.equal(response.status, 400);
+
+  const form = new FormData();
+  form.append("impresora", "1");
+  form.append("archivo", new Blob(["%PDF /Type /Page /Type /Page /Type /Page /Type /Page"], {
+    type: "application/pdf"
+  }), "paginas.pdf");
+  const created = await json(await fetch(baseUrl + "/api/pedidos", { method: "POST", body: form }));
+  assert.equal(created.paginas, 4);
+
+  response = await fetch(baseUrl + "/api/pedidos/" + created.id + "/confirmar", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ color: false, copias: 2, paginas: "1,3-5" })
+  });
+  assert.equal(response.status, 400);
+  response = await fetch(baseUrl + "/api/pedidos/" + created.id + "/confirmar", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ color: false, copias: 2, paginas: [1, 3] })
+  });
+  assert.equal(response.status, 400);
+
+  response = await fetch(baseUrl + "/api/pedidos/" + created.id + "/confirmar", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ color: false, copias: 2, paginas: "1,3-4" })
+  });
+  assert.equal(response.status, 200);
+  assert.deepEqual(await json(response), { total: 4200, paginas: 3 });
+
+  response = await fetch(baseUrl + "/api/pedidos/" + created.id + "/pagar", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      titular: "PERSONA FICTICIA",
+      numero: "1234567890123456",
+      vencimiento: "2099-12",
+      codigo: "123"
+    })
+  });
+  assert.equal(response.status, 200);
+  const order = await waitUntilReady(baseUrl, created.id);
+  assert.equal(order.paginas, 3);
+  assert.equal(order.paginasDocumento, 4);
+  assert.deepEqual(order.paginasSeleccionadas, [1, 3, 4]);
+  assert.equal(order.hojasImpresas, 6);
+
+  const storedState = JSON.parse(fs.readFileSync(path.join(dataDir, "database.json"), "utf8"));
+  assert.deepEqual(storedState.precios, { bn: 700, color: 900 });
+  const restartedServer = createApplicationServer({
+    dataDir,
+    adminPassword: TEST_ADMIN_PASSWORD
+  });
+  servers.push(restartedServer);
+  await new Promise(function(resolve) { restartedServer.listen(0, "127.0.0.1", resolve); });
+  const restartedUrl = "http://127.0.0.1:" + restartedServer.address().port;
+  assert.deepEqual((await json(await fetch(restartedUrl + "/api/config"))).precios, { bn: 700, color: 900 });
 });
 
 test("elimina los saldos de tarjetas heredados al iniciar", async function() {
@@ -77,7 +166,7 @@ test("elimina los saldos de tarjetas heredados al iniciar", async function() {
   }));
   const server = createApplicationServer({
     dataDir,
-    adminPassword: "test-admin-key",
+    adminPassword: TEST_ADMIN_PASSWORD,
     printDurationMs: 20
   });
   servers.push(server);
@@ -104,6 +193,31 @@ test("usa la clave configurada en ADMIN_PASSWORD", async function() {
     if (previousPassword === undefined) delete process.env.ADMIN_PASSWORD;
     else process.env.ADMIN_PASSWORD = previousPassword;
   }
+});
+
+test("valida la longitud mínima de la clave de administrador", function() {
+  assert.throws(function() {
+    createApplicationServer({
+      dataDir: path.join(os.tmpdir(), "impresora-server-password-test"),
+      adminPassword: "too-short"
+    });
+  }, /al menos 16 caracteres/);
+});
+
+test("limita intentos fallidos de autenticación de administrador", async function() {
+  const { baseUrl } = await startServer();
+  const attempts = await Promise.all(Array.from({ length: 12 }, function() {
+    return fetch(baseUrl + "/api/admin/pedidos", {
+      headers: { "x-clave": "incorrect-admin-password" }
+    });
+  }));
+  assert.equal(attempts.filter(function(response) { return response.status === 401; }).length, 9);
+  assert.equal(attempts.filter(function(response) { return response.status === 429; }).length, 3);
+
+  const correctPassword = await fetch(baseUrl + "/api/admin/pedidos", {
+    headers: adminHeaders()
+  });
+  assert.equal(correctPassword.status, 429);
 });
 
 test("gestiona impresoras y el flujo de un pedido persistido", async function() {
@@ -213,7 +327,7 @@ test("gestiona impresoras y el flujo de un pedido persistido", async function() 
   assert.equal(stored.orders.find(function(order) { return order.id === created.id; }).total, 9600);
   assert.equal(fs.readdirSync(path.join(dataDir, "uploads")).length, 2);
 
-  const restartedServer = createApplicationServer({ dataDir, adminPassword: "test-admin-key" });
+  const restartedServer = createApplicationServer({ dataDir, adminPassword: TEST_ADMIN_PASSWORD });
   servers.push(restartedServer);
   await new Promise(function(resolve) { restartedServer.listen(0, "127.0.0.1", resolve); });
   const restartedUrl = "http://127.0.0.1:" + restartedServer.address().port;
@@ -324,7 +438,7 @@ test("libera impresoras de trabajos interrumpidos al reiniciar el servidor", asy
       error: ""
     }]
   }));
-  const server = createApplicationServer({ dataDir, adminPassword: "test-admin-key" });
+  const server = createApplicationServer({ dataDir, adminPassword: TEST_ADMIN_PASSWORD });
   servers.push(server);
   await new Promise(function(resolve) { server.listen(0, "127.0.0.1", resolve); });
   const baseUrl = "http://127.0.0.1:" + server.address().port;
